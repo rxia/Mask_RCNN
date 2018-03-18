@@ -6,6 +6,7 @@ from model import log
 import cv2
 
 import os
+import csv
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
@@ -39,7 +40,7 @@ class NucleiConfig(Config):
 
     # Train on 1 GPU and 8 images per GPU. We can put multiple images on each
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
-    GPU_COUNT = 2
+    GPU_COUNT = 1
     IMAGES_PER_GPU = 1
 
     # Number of classes (including background)
@@ -47,8 +48,8 @@ class NucleiConfig(Config):
 
     # Use small images for faster training. Set the limits of the small side
     # the large side, and that determines the image shape.
-    IMAGE_MIN_DIM = 64
-    IMAGE_MAX_DIM = 64
+    IMAGE_MIN_DIM = 256
+    IMAGE_MAX_DIM = 256
 
     # Use smaller anchors because our image and objects are small
     RPN_ANCHOR_SCALES = (8, 16, 32, 64)  # anchor side in pixels
@@ -58,10 +59,10 @@ class NucleiConfig(Config):
     TRAIN_ROIS_PER_IMAGE = 32
 
     # Use a small epoch since the data is simple
-    STEPS_PER_EPOCH = 100
+    STEPS_PER_EPOCH = 1000
 
     # use small validation steps since the epoch is small
-    VALIDATION_STEPS = 5
+    VALIDATION_STEPS = 50
 
 
 config = NucleiConfig()
@@ -111,19 +112,25 @@ class NucleiDataset(utils.Dataset):
         color = [0]
         mask = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT,
                                     value=color)
-        mask = (np.sum(mask,axis=2)>0.5).astype('uint8')
+        mask = (mask>0.5).astype('uint8')
+        # mask = (np.sum(mask, axis=2) > 0.5).astype('uint8')
         if len(mask.shape)==2:
             mask = mask[:,:,None]
-        class_ids = np.array([class_ids[0]]).astype('int32')
+        # class_ids = np.array([class_ids[0]]).astype('int32')
         return mask, class_ids
 
 
-n_img_train = 100
-n_img_val = 10
+n_img_train = 500
+n_img_val = 100
 
 keys_data = list(data_train.keys())
-keys_train = np.random.choice(keys_data,n_img_train,replace=False)
-keys_val = np.random.choice(keys_data,n_img_val,replace=False)
+keys_random = np.random.choice(keys_data,n_img_train+n_img_val,replace=False)
+keys_train = keys_random[range(n_img_train)]
+keys_val = keys_random[range(n_img_train,n_img_train+n_img_val,1)]
+
+dataset_train_all = NucleiDataset()
+dataset_train_all.add_data_dict(data_train)
+dataset_train_all.prepare()
 
 dataset_train = NucleiDataset()
 dataset_train.add_data_dict({key:data_train[key] for key in keys_train})
@@ -133,18 +140,22 @@ dataset_val = NucleiDataset()
 dataset_val.add_data_dict({key:data_train[key] for key in keys_val})
 dataset_val.prepare()
 
+dataset_test = NucleiDataset()
+dataset_test.add_data_dict(data_test)
+dataset_test.prepare()
 
-fig, ax = plt.subplots(1,2)
-i = 9
-plt.subplot(ax[0])
-plt.imshow(dataset_train.load_image(i))
-plt.subplot(ax[1])
-plt.imshow(dataset_train.load_mask(i)[0][:,:,0])
+
+# fig, ax = plt.subplots(1,2)
+# i = 9
+# plt.subplot(ax[0])
+# plt.imshow(dataset_train.load_image(i))
+# plt.subplot(ax[1])
+# plt.imshow(dataset_train.load_mask(i)[0][:,:,0])
 
 
 model = modellib.MaskRCNN(mode="training", config=config,
                           model_dir=MODEL_DIR)
-init_with = "coco"  # imagenet, coco, or last
+init_with = "last"  # imagenet, coco, or last
 if init_with == "imagenet":
     model.load_weights(model.get_imagenet_weights(), by_name=True)
 elif init_with == "coco":
@@ -159,15 +170,202 @@ elif init_with == "last":
     model.load_weights(model.find_last()[1], by_name=True)
 
 
-
+# ## Training
 
 
 model.train(dataset_train, dataset_val,
             learning_rate=config.LEARNING_RATE,
-            epochs=1,
+            epochs=10,
             layers='heads')
 
 model.train(dataset_train, dataset_val,
+            learning_rate=config.LEARNING_RATE,
+            epochs=30,
+            layers='4+')
+
+model.train(dataset_train, dataset_val,
             learning_rate=config.LEARNING_RATE / 10,
-            epochs=2,
+            epochs=30,
             layers="all")
+
+
+# ## Validate
+
+def get_ax(rows=1, cols=1, size=8):
+    """Return a Matplotlib Axes array to be used in
+    all visualizations in the notebook. Provide a
+    central point to control graph sizes.
+
+    Change the default size attribute to control the size
+    of rendered images
+    """
+    _, ax = plt.subplots(rows, cols, figsize=(size * cols, size * rows))
+    return ax
+
+class InferenceConfig(NucleiConfig):
+    GPU_COUNT = 1
+    IMAGES_PER_GPU = 1
+
+inference_config = InferenceConfig()
+
+# Recreate the model in inference mode
+model = modellib.MaskRCNN(mode="inference",
+                          config=inference_config,
+                          model_dir=MODEL_DIR)
+
+# Get path to saved weights
+# Either set a specific path or find last trained weights
+# model_path = os.path.join(ROOT_DIR, ".h5 file name here")
+model_path = model.find_last()[1]
+
+# Load trained weights (fill in path to trained weights here)
+assert model_path != "", "Provide path to trained weights"
+print("Loading weights from ", model_path)
+model.load_weights(model_path, by_name=True)
+
+
+##  Test on a random image
+image_id = np.random.choice(dataset_val.image_ids)
+original_image, image_meta, gt_class_id, gt_bbox, gt_mask = modellib.load_image_gt(dataset_val, inference_config,
+                           image_id, use_mini_mask=False)
+
+log("original_image", original_image)
+log("image_meta", image_meta)
+log("gt_class_id", gt_class_id)
+log("gt_bbox", gt_bbox)
+log("gt_mask", gt_mask)
+
+visualize.display_instances(original_image, gt_bbox, gt_mask, gt_class_id,
+                            dataset_train.class_names, figsize=(8, 8))
+
+results = model.detect([original_image], verbose=1)
+
+r = results[0]
+visualize.display_instances(original_image, r['rois'], r['masks'], r['class_ids'],
+                            dataset_val.class_names, r['scores'], ax=get_ax())
+##
+
+
+## Evaluation
+
+# Compute VOC-Style mAP @ IoU=0.5
+image_ids = np.random.choice(dataset_val.image_ids, 100)
+APs = []
+P_Kaggles = []
+iou_thresholds = np.arange(0.5,0.95,0.05)
+for i in iou_thresholds:
+    APs_i = []
+    P_Kaggle_i = []
+    print('threshold: {}'.format(i))
+    for image_id in image_ids:
+        # Load image and ground truth data
+        image, image_meta, gt_class_id, gt_bbox, gt_mask = modellib.load_image_gt(dataset_val, inference_config,
+                                                                                  image_id, use_mini_mask=False)
+        molded_images = np.expand_dims(modellib.mold_image(image, inference_config), 0)
+        # Run object detection
+        results = model.detect([image], verbose=0)
+        r = results[0]
+        # Compute AP
+        AP, precision_kaggle, precisions, recalls, overlaps = utils.compute_ap(gt_bbox, gt_class_id, gt_mask,
+                                                             r["rois"], r["class_ids"], r["scores"], r['masks'],
+                                                             iou_threshold = i)
+        APs_i.append(AP)
+        P_Kaggle_i.append(precision_kaggle)
+    APs.append(APs_i)
+    P_Kaggles.append(P_Kaggle_i)
+
+print("mAP: ", np.mean(np.array(APs),axis=1))
+print("Precision Kaggle: ", np.mean(np.array(P_Kaggles),axis=1))
+
+
+##
+def rle_encoding(mask):
+    '''
+    x: numpy array of shape (height, width), 1 - mask, 0 - background
+    Returns run length as list
+    '''
+    non_zeros = np.where(mask.T.flatten() > 0)[0]    # .T sets Fortran order down-then-right
+    run_lengths = []
+    for i in range(len(non_zeros)):
+        if i==0 or non_zeros[i]-non_zeros[i-1] > 1:
+            start = non_zeros[i]
+            count = 1
+            run_lengths.append(start)
+            run_lengths.append(count)
+        elif non_zeros[i]-non_zeros[i-1] == 1:
+            run_lengths[-1] += 1
+    return run_lengths
+
+
+test_img_keys = list(data_test.keys())
+images = [data_test[key]['image'] for key in test_img_keys]
+results = []
+for image in images:
+    results.append(model.detect([image], verbose=1))
+
+mask_ImageId = []
+mask_EncodedPixels = []
+for i in range(len(results)):
+    masks_i = results[i][0]['masks']
+    for j in range(results[i][0]['masks'].shape[2]):
+        sum_masks_i = np.sum(masks_i, axis=2)
+        mask = masks_i[:,:,j]
+        mask[sum_masks_i>1] = 0
+        masks_i[:,:,j] = mask
+        if np.sum(mask)>1:
+            mask_ImageId.append(test_img_keys[i])
+            recoded_mask = rle_encoding(mask)
+            mask_EncodedPixels.append(recoded_mask)
+masks = {'ImageId':mask_ImageId,'EncodedPixels':mask_EncodedPixels}
+
+with open("test.csv","w") as f:
+    f.write(",".join(masks.keys()) + "\n")
+    for i in range(len(masks['ImageId'])):
+        f.write(masks['ImageId'][i] + ',')
+        f.write(" ".join([str(n) for n in masks['EncodedPixels'][i]]) + "\n")
+    f.close()
+
+with open("test.csv") as f:
+    test = f.read()
+    for row in test:
+        print(row)
+    f.close()
+
+##
+for i in range(len(results)):
+    h_fig, h_axes = plt.subplots(1, 2, sharex='all', sharey='all', figsize=[12,8])
+    plt.axes(h_axes[0])
+    h_axes[0].axis('off')
+    plt.imshow(images[i])
+    visualize.display_instances(images[i], results[i][0]['rois'], results[i][0]['masks'], results[i][0]['class_ids'],
+                            dataset_test.class_names, results[i][0]['scores'], ax=h_axes[1])
+    plt.savefig('./results/test1_0314model/{}.png'.format(i))
+    plt.close()
+
+
+##
+
+results_train = []
+for i in range(len(keys_data)):
+    original_image, image_meta, gt_class_id, gt_bbox, gt_mask = modellib.load_image_gt(dataset_train_all, inference_config,
+                                                                                       i, use_mini_mask=False)
+    log("original_image", original_image)
+    log("image_meta", image_meta)
+    log("gt_class_id", gt_class_id)
+    log("gt_bbox", gt_bbox)
+    log("gt_mask", gt_mask)
+
+    h_fig, h_axes = plt.subplots(1, 3, sharex='all', sharey='all', figsize=[18,8])
+    plt.axes(h_axes[0])
+    h_axes[0].axis('off')
+    plt.imshow(original_image)
+
+    visualize.display_instances(original_image, gt_bbox, gt_mask, gt_class_id,
+                                dataset_train_all.class_names, ax=h_axes[1])
+
+    results_train.append(model.detect([original_image], verbose=1))
+    visualize.display_instances(original_image, results_train[i][0]['rois'], results_train[i][0]['masks'], results_train[i][0]['class_ids'],
+                                dataset_train_all.class_names, results_train[i][0]['scores'], ax=h_axes[2])
+    plt.savefig('./results/train1_0314model/{}.png'.format(i))
+    plt.close()
+##
