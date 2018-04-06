@@ -47,8 +47,8 @@ def extract_bboxes(mask):
             y2 += 1
 
             # ================ Added border to enlarge bbox ===============
-            w = (x2 - x1) + 1
-            h = (y2 - y1) + 1
+            w = (x2 - x1)
+            h = (y2 - y1)
             H, W = m.shape
 
             border = max(2, round(0.2 * (w + h) / 2))
@@ -62,8 +62,8 @@ def extract_bboxes(mask):
             # clip
             x1 = max(0, x1)
             y1 = max(0, y1)
-            x2 = min(W - 1, x2)
-            y2 = min(H - 1, y2)
+            x2 = min(W, x2)
+            y2 = min(H, y2)
             # ================================================================
 
         else:
