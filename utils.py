@@ -45,10 +45,33 @@ def extract_bboxes(mask):
             # x2 and y2 should not be part of the box. Increment by 1.
             x2 += 1
             y2 += 1
+
+            # ================ Added border to enlarge bbox ===============
+            w = (x2 - x1) + 1
+            h = (y2 - y1) + 1
+            H, W = m.shape
+
+            border = max(2, round(0.2 * (w + h) / 2))
+            # border = max(1, round(0.1*min(w,h)))
+            # border = 0
+            x1 = x1 - border
+            x2 = x2 + border
+            y1 = y1 - border
+            y2 = y2 + border
+
+            # clip
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(W - 1, x2)
+            y2 = min(H - 1, y2)
+            # ================================================================
+
         else:
             # No mask for this instance. Might happen due to
             # resizing or cropping. Set bbox to zeros
             x1, x2, y1, y2 = 0, 0, 0, 0
+
+
         boxes[i] = np.array([y1, x1, y2, x2])
     return boxes.astype(np.int32)
 

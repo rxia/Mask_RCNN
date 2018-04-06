@@ -284,7 +284,7 @@ def rle_encoding(mask):
     x: numpy array of shape (height, width), 1 - mask, 0 - background
     Returns run length as list
     '''
-    non_zeros = np.where(mask.T.flatten() > 0)[0]    # .T sets Fortran order down-then-right
+    non_zeros = np.where(mask.T.flatten() > 0)[0] + 1    # .T sets Fortran order down-then-right
     run_lengths = []
     for i in range(len(non_zeros)):
         if i==0 or non_zeros[i]-non_zeros[i-1] > 1:
